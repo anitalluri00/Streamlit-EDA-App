@@ -6,11 +6,9 @@ import seaborn as sns
 import os
 import tempfile
 
-# Import ydata-sdk's ProfileReport
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
 
-# Import tabula for PDF table extraction
 try:
     import tabula
 except ImportError:
@@ -62,7 +60,13 @@ def read_file(uploaded_file, ext):
             dfs = tabula.read_pdf(tmp.name, pages="all", multiple_tables=True)
             if len(dfs) == 0:
                 raise ValueError("No tables found in PDF file.")
-            return dfs[0]
+            df_pdf = dfs[0]
+
+            # Convert all object dtype columns to string to fix PyArrow conversion issues
+            for col in df_pdf.select_dtypes(include=['object']).columns:
+                df_pdf[col] = df_pdf[col].astype(str)
+
+            return df_pdf
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
@@ -94,7 +98,7 @@ if uploaded_file:
     st.write("## Missing Values per Column")
     st.write(df.isnull().sum())
 
-    # Duplicates
+    # Duplicate rows
     st.write("## Duplicate Rows")
     duplicates = df[df.duplicated()]
     if len(duplicates) > 0:
@@ -123,7 +127,7 @@ if uploaded_file:
     else:
         st.write("No numeric columns available for correlation analysis.")
 
-    # Univariate analysis: histograms for first 5 numeric columns
+    # Univariate numeric histograms (first 5)
     st.write("## Univariate Analysis (Numeric Columns - first 5)")
     numeric_cols = numeric_df.columns.tolist()
     for col in numeric_cols[:5]:
@@ -139,7 +143,7 @@ if uploaded_file:
         except Exception as e:
             st.write(f"Skipping histogram for '{col}' due to error: {e}")
 
-    # Boxplots for outlier detection, first 5 numeric columns
+    # Boxplots for numeric columns (first 5)
     st.write("## Boxplot (Outlier Detection - Numeric Columns - first 5)")
     for col in numeric_cols[:5]:
         try:
@@ -154,7 +158,7 @@ if uploaded_file:
         except Exception as e:
             st.write(f"Skipping boxplot for '{col}' due to error: {e}")
 
-    # Pairplot for first 5 numeric columns if enough exists
+    # Pairplot for numeric columns if enough columns
     st.write("## Pairplot (First 5 Numeric Columns)")
     if len(numeric_cols) >= 2:
         try:
@@ -172,7 +176,7 @@ if uploaded_file:
         st.write(f"### {col}")
         st.write(df[col].value_counts())
 
-    # Generate and display ydata-sdk profiling report
+    # Generate profiling report with ydata-sdk
     st.write("## Automated EDA Profiling (ydata-sdk)")
     profile = ProfileReport(df, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
