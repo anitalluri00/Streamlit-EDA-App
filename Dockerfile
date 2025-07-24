@@ -1,5 +1,6 @@
-FROM python:3.10.14-slim
+FROM python:3.10-slim
 
+# Install Java Runtime needed by tabula-py (PDF support)
 RUN apt-get update && apt-get install -y default-jre && apt-get clean
 
 WORKDIR /app
