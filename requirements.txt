@@ -3,7 +3,7 @@ pandas
 numpy
 matplotlib
 seaborn
-ydata-profiling
+ydata-sdk
 streamlit-pandas-profiling
 openpyxl
 xlrd>=2.0.1
