@@ -8,4 +8,3 @@ streamlit-pandas-profiling
 openpyxl
 xlrd>=2.0.1
 tabula-py
-ydata-profiling<=4.8.3
