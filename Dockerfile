@@ -5,7 +5,9 @@ WORKDIR /app
 COPY . /app
 
 RUN pip install --upgrade pip
-RUN pip install streamlit pandas numpy matplotlib seaborn ydata-profiling streamlit-pandas-profiling
+
+# Install dependencies including xlrd and openpyxl
+RUN pip install -r requirements.txt
 
 EXPOSE 8501
 
