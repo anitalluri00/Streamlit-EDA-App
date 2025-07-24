@@ -6,14 +6,15 @@ import seaborn as sns
 import os
 import tempfile
 
+# Import ydata-sdk's ProfileReport
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
 
-# PDF support requires Java and tabula-py
+# Import tabula for PDF table extraction
 try:
     import tabula
 except ImportError:
-    st.error("tabula-py not installed. Please install tabula-py to support PDF files.")
+    st.error("Please install 'tabula-py' to enable PDF file support (`pip install tabula-py`).")
     st.stop()
 
 SUPPORTED = {
@@ -26,12 +27,12 @@ SUPPORTED = {
     ".pdf": "PDF"
 }
 
-st.set_page_config(page_title="Comprehensive EDA App", layout="wide")
+st.set_page_config(page_title="Comprehensive EDA App with ydata-sdk", layout="wide")
 
-st.title("Comprehensive EDA Web App")
+st.title("Comprehensive EDA Web App with ydata-sdk")
 st.markdown("""
-Upload your data in one of the following formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF.  
-The app will automatically perform Exploratory Data Analysis (EDA) and generate an interactive report.
+Upload your dataset in one of these formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF (with tables).  
+The app performs detailed EDA and generates an interactive profile report using **ydata-sdk**.
 """)
 
 uploaded_file = st.file_uploader(
@@ -55,14 +56,12 @@ def read_file(uploaded_file, ext):
             uploaded_file.seek(0)
             return pd.read_table(uploaded_file)
     elif ext == ".pdf":
-        # Save uploaded PDF to temp file for tabula to read
         with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as tmp:
             tmp.write(uploaded_file.read())
             tmp.flush()
             dfs = tabula.read_pdf(tmp.name, pages="all", multiple_tables=True)
             if len(dfs) == 0:
                 raise ValueError("No tables found in PDF file.")
-            # Return first detected table as DataFrame
             return dfs[0]
     else:
         raise ValueError(f"Unsupported file type: {ext}")
@@ -70,27 +69,32 @@ def read_file(uploaded_file, ext):
 if uploaded_file:
     _, ext = os.path.splitext(uploaded_file.name)
     ext = ext.lower()
-    st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext,ext)})")
-
+    st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
+    
     try:
         df = read_file(uploaded_file, ext)
     except Exception as e:
         st.error(f"Error loading file: {e}")
         st.stop()
 
+    # Show data preview
     st.write("## Head of Data")
     st.dataframe(df.head())
 
+    # Shape and columns info
     st.write("## Shape & Columns")
     st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
     st.write(f"Columns: {list(df.columns)}")
 
+    # Data types
     st.write("## Data Types")
     st.write(df.dtypes)
 
+    # Missing values count
     st.write("## Missing Values per Column")
     st.write(df.isnull().sum())
 
+    # Duplicates
     st.write("## Duplicate Rows")
     duplicates = df[df.duplicated()]
     if len(duplicates) > 0:
@@ -98,12 +102,15 @@ if uploaded_file:
     else:
         st.write("No duplicate rows found.")
 
+    # Descriptive statistics
     st.write("## Descriptive Statistics")
     st.write(df.describe(include="all").transpose())
 
+    # Unique values counts
     st.write("## Unique Values per Column")
     st.write(df.nunique())
 
+    # Correlation matrix on numeric columns
     st.write("## Correlation Matrix (Numeric Columns)")
     numeric_df = df.select_dtypes(include=np.number)
     if numeric_df.shape[1] > 0:
@@ -116,6 +123,7 @@ if uploaded_file:
     else:
         st.write("No numeric columns available for correlation analysis.")
 
+    # Univariate analysis: histograms for first 5 numeric columns
     st.write("## Univariate Analysis (Numeric Columns - first 5)")
     numeric_cols = numeric_df.columns.tolist()
     for col in numeric_cols[:5]:
@@ -131,6 +139,7 @@ if uploaded_file:
         except Exception as e:
             st.write(f"Skipping histogram for '{col}' due to error: {e}")
 
+    # Boxplots for outlier detection, first 5 numeric columns
     st.write("## Boxplot (Outlier Detection - Numeric Columns - first 5)")
     for col in numeric_cols[:5]:
         try:
@@ -145,6 +154,7 @@ if uploaded_file:
         except Exception as e:
             st.write(f"Skipping boxplot for '{col}' due to error: {e}")
 
+    # Pairplot for first 5 numeric columns if enough exists
     st.write("## Pairplot (First 5 Numeric Columns)")
     if len(numeric_cols) >= 2:
         try:
@@ -155,14 +165,16 @@ if uploaded_file:
     else:
         st.write("Not enough numeric columns for pairplot.")
 
+    # Value counts for first 3 categorical columns
     st.write("## Value Counts (First 3 Categorical Columns)")
     cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
     for col in cat_cols[:3]:
         st.write(f"### {col}")
         st.write(df[col].value_counts())
 
-    st.write("## Automated EDA Profiling (ydata-profiling)")
-    profile = ProfileReport(df, title="Pandas Profiling Report", explorative=True)
+    # Generate and display ydata-sdk profiling report
+    st.write("## Automated EDA Profiling (ydata-sdk)")
+    profile = ProfileReport(df, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
 
 else:
