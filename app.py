@@ -4,30 +4,39 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import tempfile
 
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
 
+# PDF support requires Java and tabula-py
+try:
+    import tabula
+except ImportError:
+    st.error("tabula-py not installed. Please install tabula-py to support PDF files.")
+    st.stop()
+
 SUPPORTED = {
     ".csv": "CSV",
-    ".xlsx": "Excel",
+    ".xlsx": "Excel (xlsx)",
     ".xls": "Excel (xls)",
     ".txt": "Text",
     ".tsv": "TSV",
-    ".json": "JSON"
+    ".json": "JSON",
+    ".pdf": "PDF"
 }
 
 st.set_page_config(page_title="Comprehensive EDA App", layout="wide")
 
 st.title("Comprehensive EDA Web App")
 st.markdown("""
-Upload your data in any common format (CSV, XLSX, XLS, JSON, TXT, TSV).  
-The app will display all EDA metrics and a profiling report.
+Upload your data in one of the following formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF.  
+The app will automatically perform Exploratory Data Analysis (EDA) and generate an interactive report.
 """)
 
 uploaded_file = st.file_uploader(
     "Choose a data file", type=[k[1:] for k in SUPPORTED.keys()])
-    
+
 def read_file(uploaded_file, ext):
     if ext == ".csv":
         return pd.read_csv(uploaded_file)
@@ -45,8 +54,18 @@ def read_file(uploaded_file, ext):
         except Exception:
             uploaded_file.seek(0)
             return pd.read_table(uploaded_file)
+    elif ext == ".pdf":
+        # Save uploaded PDF to temp file for tabula to read
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.read())
+            tmp.flush()
+            dfs = tabula.read_pdf(tmp.name, pages="all", multiple_tables=True)
+            if len(dfs) == 0:
+                raise ValueError("No tables found in PDF file.")
+            # Return first detected table as DataFrame
+            return dfs[0]
     else:
-        return None
+        raise ValueError(f"Unsupported file type: {ext}")
 
 if uploaded_file:
     _, ext = os.path.splitext(uploaded_file.name)
@@ -55,9 +74,6 @@ if uploaded_file:
 
     try:
         df = read_file(uploaded_file, ext)
-        if df is None:
-            st.error("File type not supported yet.")
-            st.stop()
     except Exception as e:
         st.error(f"Error loading file: {e}")
         st.stop()
