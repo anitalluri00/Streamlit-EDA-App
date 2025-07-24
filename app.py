@@ -15,7 +15,6 @@ SUPPORTED = {
     ".txt": "Text",
     ".tsv": "TSV",
     ".json": "JSON"
-    # Optionally add PDF, DOCX parsing for tables with tabula/pypdf/pandas-docx
 }
 
 st.set_page_config(page_title="Comprehensive EDA App", layout="wide")
@@ -26,26 +25,36 @@ Upload your data in any common format (CSV, XLSX, JSON, TXT, TSV).
 The app will display all EDA metrics and a profiling report.
 """)
 
-uploaded_file = st.file_uploader("Choose a data file", type=list([k[1:] for k in SUPPORTED.keys()]))
+uploaded_file = st.file_uploader("Choose a data file", type=[k[1:] for k in SUPPORTED.keys()])
 
 if uploaded_file:
     _, ext = os.path.splitext(uploaded_file.name)
     ext = ext.lower()
     st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext,ext)})")
 
-    # Reading different formats
-    if ext == ".csv":
-        df = pd.read_csv(uploaded_file)
-    elif ext in [".xlsx", ".xls"]:
-        df = pd.read_excel(uploaded_file)
-    elif ext == ".tsv":
-        df = pd.read_csv(uploaded_file, sep="\t")
-    elif ext == ".json":
-        df = pd.read_json(uploaded_file)
-    elif ext == ".txt":
-        df = pd.read_csv(uploaded_file, sep=None, engine="python")
-    else:
-        st.error("File type not supported yet.")
+    # Reading different formats with error handling
+    try:
+        if ext == ".csv":
+            df = pd.read_csv(uploaded_file)
+        elif ext in [".xlsx", ".xls"]:
+            df = pd.read_excel(uploaded_file)
+        elif ext == ".tsv":
+            df = pd.read_csv(uploaded_file, sep="\t")
+        elif ext == ".json":
+            df = pd.read_json(uploaded_file)
+        elif ext == ".txt":
+            # Try CSV with auto separator detection (comma, tab, space)
+            try:
+                df = pd.read_csv(uploaded_file, sep=None, engine="python")
+            except:
+                uploaded_file.seek(0)
+                df = pd.read_table(uploaded_file)
+        else:
+            st.error("File type not supported yet.")
+            st.stop()
+
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
         st.stop()
 
     st.write("## Head of Data")
@@ -62,41 +71,54 @@ if uploaded_file:
     st.write(df.isnull().sum())
 
     st.write("## Duplicates")
-    st.write(df[df.duplicated()])
+    duplicates = df[df.duplicated()]
+    if len(duplicates) > 0:
+        st.dataframe(duplicates)
+    else:
+        st.write("No duplicate rows found.")
 
     st.write("## Descriptive Statistics")
-    st.write(df.describe(include="all"))
+    st.write(df.describe(include="all").transpose())
 
     st.write("## Unique values per column")
     st.write(df.nunique())
 
     st.write("## Correlation Matrix (Numeric Columns)")
-    st.dataframe(df.corr())
-    st.write("## Correlation Heatmap")
-    fig, ax = plt.subplots()
-    sns.heatmap(df.corr(), annot=True, ax=ax)
-    st.pyplot(fig)
+    numeric_df = df.select_dtypes(include=np.number)
+    if numeric_df.shape[1] > 0:
+        corr = numeric_df.corr()
+        st.dataframe(corr)
+        st.write("## Correlation Heatmap")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+        st.pyplot(fig)
+    else:
+        st.write("No numeric columns available for correlation analysis.")
 
-    st.write("## Univariate Analysis")
-    for col in df.select_dtypes(include=np.number).columns[:5]:
+    st.write("## Univariate Analysis (Numeric Columns - first 5)")
+    numeric_cols = numeric_df.columns.tolist()
+    for col in numeric_cols[:5]:
         fig, ax = plt.subplots()
         sns.histplot(df[col].dropna(), kde=True, ax=ax)
+        ax.set_title(f'Histogram and KDE of {col}')
         st.pyplot(fig)
-    
-    st.write("## Boxplot (Outlier Detection: Numeric Columns)")
-    for col in df.select_dtypes(include=np.number).columns[:5]:
+
+    st.write("## Boxplot (Outlier Detection - Numeric Columns - first 5)")
+    for col in numeric_cols[:5]:
         fig, ax = plt.subplots()
         sns.boxplot(x=df[col], ax=ax)
+        ax.set_title(f'Boxplot of {col}')
         st.pyplot(fig)
 
     st.write("## Pairplot (First 5 Numeric Columns)")
-    if len(df.select_dtypes(include=np.number).columns) >= 2:
-        cols = df.select_dtypes(include=np.number).columns[:5]
-        sns.pairplot(df[cols].dropna())
+    if len(numeric_cols) >= 2:
+        sns.pairplot(df[numeric_cols[:5]].dropna())
         st.pyplot()
+    else:
+        st.write("Not enough numeric columns for pairplot.")
 
     st.write("## Value Counts (First 3 Categorical Columns)")
-    cat_cols = df.select_dtypes(exclude=np.number).columns
+    cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
     for col in cat_cols[:3]:
         st.write(f"### {col}")
         st.write(df[col].value_counts())
