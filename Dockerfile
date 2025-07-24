@@ -1,12 +1,13 @@
 FROM python:3.9-slim
 
+# Install Java Runtime for tabula-py PDF support
+RUN apt-get update && apt-get install -y default-jre && apt-get clean
+
 WORKDIR /app
 
 COPY . /app
 
 RUN pip install --upgrade pip
-
-# Install dependencies including xlrd and openpyxl
 RUN pip install -r requirements.txt
 
 EXPOSE 8501
