@@ -5,5 +5,6 @@ matplotlib
 seaborn
 ydata-profiling
 streamlit-pandas-profiling
-openpyxl      # for reading .xlsx files
-xlrd>=2.0.1   # for reading old .xls files
+openpyxl
+xlrd>=2.0.1
+tabula-py
