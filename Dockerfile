@@ -1,7 +1,7 @@
 FROM python:3.10-slim
 
 # Install Java Runtime needed by tabula-py for PDF support,
-# and build essentials + libpq-dev for psycopg2 dependency.
+# plus build-essential and libpq-dev for certain dependencies.
 RUN apt-get update && apt-get install -y \
     default-jre \
     build-essential \
