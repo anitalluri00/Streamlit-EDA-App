@@ -9,7 +9,6 @@ import tempfile
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
 
-# Import tabula for PDF table extraction with error handling
 try:
     import tabula
 except ImportError:
@@ -30,8 +29,8 @@ st.set_page_config(page_title="Comprehensive EDA App with ydata-sdk", layout="wi
 
 st.title("Comprehensive EDA Web App with ydata-sdk")
 st.markdown("""
-Upload your dataset in one of the supported formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF (with tables).  
-The app performs detailed EDA and generates an interactive profile report using **ydata-sdk**.
+Upload your dataset in any of these formats: **CSV, XLSX, XLS, JSON, TXT, TSV, PDF (with tables)**.  
+Generate a complete EDA and interactive profile report using **ydata-sdk**.
 """)
 
 def read_file(uploaded_file, ext):
@@ -59,7 +58,6 @@ def read_file(uploaded_file, ext):
             if len(dfs) == 0:
                 raise ValueError("No tables found in PDF file.")
             df_pdf = dfs[0]
-            # Convert all object dtype columns to string to avoid pyarrow errors
             for col in df_pdf.select_dtypes(include=['object']).columns:
                 df_pdf[col] = df_pdf[col].astype(str)
             return df_pdf
@@ -69,16 +67,25 @@ def read_file(uploaded_file, ext):
 uploaded_file = st.file_uploader(
     "Choose a data file", type=[k[1:] for k in SUPPORTED.keys()])
 
-if uploaded_file:
-    _, ext = os.path.splitext(uploaded_file.name)
-    ext = ext.lower()
-    st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
+# ---- SUGGESTED: Example Sample Data Button for Demo Purposes ----
+if st.sidebar.button("Load Sample Dataset"):
+    df = sns.load_dataset("iris")
+    sample_loaded = True
+else:
+    sample_loaded = False
 
-    try:
-        df = read_file(uploaded_file, ext)
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-        st.stop()
+if uploaded_file or sample_loaded:
+    if uploaded_file:
+        _, ext = os.path.splitext(uploaded_file.name)
+        ext = ext.lower()
+        st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
+        try:
+            df = read_file(uploaded_file, ext)
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+            st.stop()
+    elif sample_loaded:
+        st.success("Loaded sample dataset: iris")
 
     st.write("## Head of Data")
     st.dataframe(df.head())
@@ -150,7 +157,6 @@ if uploaded_file:
     st.write("## Pairplot (First 5 Numeric Columns)")
     if len(numeric_cols) >= 2:
         try:
-            # FIX: capture returned PairGrid, pass its .fig to st.pyplot
             pair_grid = sns.pairplot(df[numeric_cols[:5]].dropna())
             st.pyplot(pair_grid.fig)
         except Exception as e:
@@ -168,5 +174,15 @@ if uploaded_file:
     profile = ProfileReport(df, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
 
+    # ---- SUGGESTED: Download Button to Export Cleaned Data as CSV ----
+    csv_data = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download Data as CSV",
+        data=csv_data,
+        file_name="data_processed.csv",
+        mime="text/csv",
+        help="Download the current (possibly cleaned) data as a CSV file.",
+    )
+
 else:
-    st.info("Upload a file to get started.")
+    st.info("Upload a file to get started or use the sidebar to load a sample dataset.")
