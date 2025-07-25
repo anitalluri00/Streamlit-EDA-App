@@ -29,12 +29,9 @@ st.set_page_config(page_title="Comprehensive EDA App with ydata-sdk", layout="wi
 
 st.title("Comprehensive EDA Web App with ydata-sdk")
 st.markdown("""
-Upload your dataset in one of these formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF (with tables).  
+Upload your dataset in one of the supported formats: CSV, XLSX, XLS, JSON, TXT, TSV, PDF (with tables).  
 The app performs detailed EDA and generates an interactive profile report using **ydata-sdk**.
 """)
-
-uploaded_file = st.file_uploader(
-    "Choose a data file", type=[k[1:] for k in SUPPORTED.keys()])
 
 def read_file(uploaded_file, ext):
     if ext == ".csv":
@@ -61,44 +58,40 @@ def read_file(uploaded_file, ext):
             if len(dfs) == 0:
                 raise ValueError("No tables found in PDF file.")
             df_pdf = dfs[0]
-
-            # Convert all object dtype columns to string to fix PyArrow conversion issues
+            # Convert all object dtype columns to string to avoid pyarrow errors
             for col in df_pdf.select_dtypes(include=['object']).columns:
                 df_pdf[col] = df_pdf[col].astype(str)
-
             return df_pdf
     else:
         raise ValueError(f"Unsupported file type: {ext}")
+
+uploaded_file = st.file_uploader(
+    "Choose a data file", type=[k[1:] for k in SUPPORTED.keys()])
 
 if uploaded_file:
     _, ext = os.path.splitext(uploaded_file.name)
     ext = ext.lower()
     st.success(f"File uploaded: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
-    
+
     try:
         df = read_file(uploaded_file, ext)
     except Exception as e:
         st.error(f"Error loading file: {e}")
         st.stop()
 
-    # Show data preview
     st.write("## Head of Data")
     st.dataframe(df.head())
 
-    # Shape and columns info
     st.write("## Shape & Columns")
     st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
     st.write(f"Columns: {list(df.columns)}")
 
-    # Data types
     st.write("## Data Types")
     st.write(df.dtypes)
 
-    # Missing values count
     st.write("## Missing Values per Column")
     st.write(df.isnull().sum())
 
-    # Duplicate rows
     st.write("## Duplicate Rows")
     duplicates = df[df.duplicated()]
     if len(duplicates) > 0:
@@ -106,15 +99,12 @@ if uploaded_file:
     else:
         st.write("No duplicate rows found.")
 
-    # Descriptive statistics
     st.write("## Descriptive Statistics")
     st.write(df.describe(include="all").transpose())
 
-    # Unique values counts
     st.write("## Unique Values per Column")
     st.write(df.nunique())
 
-    # Correlation matrix on numeric columns
     st.write("## Correlation Matrix (Numeric Columns)")
     numeric_df = df.select_dtypes(include=np.number)
     if numeric_df.shape[1] > 0:
@@ -127,29 +117,27 @@ if uploaded_file:
     else:
         st.write("No numeric columns available for correlation analysis.")
 
-    # Univariate numeric histograms (first 5)
-    st.write("## Univariate Analysis (Numeric Columns - first 5)")
+    st.write("## Univariate Analysis (Numeric Columns — first 5)")
     numeric_cols = numeric_df.columns.tolist()
     for col in numeric_cols[:5]:
         try:
             data = pd.to_numeric(df[col], errors='coerce').dropna()
             if data.empty:
-                st.write(f"Skipping histogram for '{col}' (no valid numeric data).")
+                st.write(f"Skipping histogram for '{col}' — no valid numeric data.")
                 continue
             fig, ax = plt.subplots()
             sns.histplot(data, kde=True, ax=ax)
-            ax.set_title(f'Histogram and KDE of {col}')
+            ax.set_title(f'Histogram & KDE of {col}')
             st.pyplot(fig)
         except Exception as e:
             st.write(f"Skipping histogram for '{col}' due to error: {e}")
 
-    # Boxplots for numeric columns (first 5)
-    st.write("## Boxplot (Outlier Detection - Numeric Columns - first 5)")
+    st.write("## Boxplot (Outlier Detection — Numeric Columns — first 5)")
     for col in numeric_cols[:5]:
         try:
             data = pd.to_numeric(df[col], errors='coerce').dropna()
             if data.empty:
-                st.write(f"Skipping boxplot for '{col}' (no valid numeric data).")
+                st.write(f"Skipping boxplot for '{col}' — no valid numeric data.")
                 continue
             fig, ax = plt.subplots()
             sns.boxplot(x=data, ax=ax)
@@ -158,7 +146,6 @@ if uploaded_file:
         except Exception as e:
             st.write(f"Skipping boxplot for '{col}' due to error: {e}")
 
-    # Pairplot for numeric columns if enough columns
     st.write("## Pairplot (First 5 Numeric Columns)")
     if len(numeric_cols) >= 2:
         try:
@@ -169,14 +156,12 @@ if uploaded_file:
     else:
         st.write("Not enough numeric columns for pairplot.")
 
-    # Value counts for first 3 categorical columns
     st.write("## Value Counts (First 3 Categorical Columns)")
     cat_cols = df.select_dtypes(exclude=np.number).columns.tolist()
     for col in cat_cols[:3]:
         st.write(f"### {col}")
         st.write(df[col].value_counts())
 
-    # Generate profiling report with ydata-sdk
     st.write("## Automated EDA Profiling (ydata-sdk)")
     profile = ProfileReport(df, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
