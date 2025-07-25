@@ -9,6 +9,7 @@ import tempfile
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
 
+# Import tabula for PDF table extraction with error handling
 try:
     import tabula
 except ImportError:
@@ -149,8 +150,9 @@ if uploaded_file:
     st.write("## Pairplot (First 5 Numeric Columns)")
     if len(numeric_cols) >= 2:
         try:
-            sns.pairplot(df[numeric_cols[:5]].dropna())
-            st.pyplot()
+            # FIX: capture returned PairGrid, pass its .fig to st.pyplot
+            pair_grid = sns.pairplot(df[numeric_cols[:5]].dropna())
+            st.pyplot(pair_grid.fig)
         except Exception as e:
             st.write(f"Could not create pairplot: {e}")
     else:
