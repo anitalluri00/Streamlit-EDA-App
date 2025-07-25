@@ -8,4 +8,4 @@ streamlit-pandas-profiling
 openpyxl
 xlrd>=2.0.1
 tabula-py
-psycopg2-binary==2.9.*
+scikit-learn
