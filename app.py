@@ -37,7 +37,7 @@ st.title("Complete Data Science Pipeline with EDA and ML")
 st.markdown(
     """
     Upload your dataset (CSV, XLSX, XLS, JSON, TXT, TSV, PDF with tables) and perform full EDA, preprocessing,
-    training, prediction, evaluation, and visualization directly in this app.  
+    training, prediction, evaluation, and visualization directly in this app.
     """
 )
 
@@ -55,7 +55,7 @@ def read_file(uploaded_file, ext):
     elif ext == ".txt":
         try:
             return pd.read_csv(uploaded_file, sep=None, engine="python")
-        except Exception:
+        except:
             uploaded_file.seek(0)
             return pd.read_table(uploaded_file)
     elif ext == ".pdf":
@@ -66,7 +66,7 @@ def read_file(uploaded_file, ext):
             if not dfs:
                 raise ValueError("No tables found in PDF file.")
             df_pdf = dfs[0]
-            # Convert object columns to string (fix pyarrow issues)
+            # Convert object columns to string for compatibility
             for col in df_pdf.select_dtypes(include=['object']).columns:
                 df_pdf[col] = df_pdf[col].astype(str)
             return df_pdf
@@ -89,7 +89,7 @@ def clean_data(df, drop_duplicates, missing_strategy):
 def encode_features(df, cat_cols):
     if not cat_cols:
         return df
-    encoder = OneHotEncoder(drop='first', sparse=False)
+    encoder = OneHotEncoder(drop='first', sparse_output=False)
     encoded = encoder.fit_transform(df[cat_cols])
     encoded_df = pd.DataFrame(encoded, columns=encoder.get_feature_names_out(cat_cols), index=df.index)
     df = df.drop(columns=cat_cols)
@@ -117,7 +117,7 @@ def plot_regression_performance(y_true, y_pred):
 uploaded_file = st.file_uploader("Upload your data file", type=[k[1:] for k in SUPPORTED.keys()])
 
 if uploaded_file:
-    _, ext = uploaded_file.name.split('.')[-1], '.' + uploaded_file.name.split('.')[-1]
+    _, ext = tempfile.os.path.splitext(uploaded_file.name)
     ext = ext.lower()
     st.success(f"Uploaded file: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
 
@@ -145,7 +145,7 @@ if uploaded_file:
     st.header("Clean & Preprocess Data")
     drop_dupes = st.checkbox("Drop duplicates", value=True)
     missing_strategy = st.selectbox(
-        "Missing value handling",
+        "Missing value handling strategy",
         ("Drop rows", "Fill with mean/mode", "Do nothing"),
         index=1
     )
@@ -172,7 +172,7 @@ if uploaded_file:
     cat_cols = [col for col in feature_cols if df_clean[col].dtype == 'object']
     df_features = encode_features(df_clean[feature_cols].copy(), cat_cols)
 
-    # Optional feature engineering example
+    # Optional feature engineering
     st.subheader("Optional Feature Engineering")
     add_feature = st.checkbox("Add product of first two numeric features as new feature")
     if add_feature:
@@ -180,9 +180,9 @@ if uploaded_file:
         if len(numeric_feats) >= 2:
             new_feat_name = f"{numeric_feats[0]}_x_{numeric_feats[1]}"
             df_features[new_feat_name] = df_features[numeric_feats[0]] * df_features[numeric_feats[1]]
-            st.info(f"New feature '{new_feat_name}' added")
+            st.info(f"Added new feature '{new_feat_name}'")
         else:
-            st.info("Not enough numeric features for feature engineering")
+            st.info("Not enough numeric features to create new feature")
 
     ## Split Data
     st.header("Split Data")
@@ -190,8 +190,7 @@ if uploaded_file:
     random_state = st.number_input("Random seed", value=42, step=1, format='%d')
 
     try:
-        X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size,
-                                                            random_state=random_state)
+        X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size, random_state=random_state)
     except Exception as e:
         st.error(f"Error splitting data: {e}")
         st.stop()
@@ -206,7 +205,7 @@ if uploaded_file:
 
     if model_type == "Classification":
         st.write("Using Logistic Regression")
-        C = st.number_input("Regularization (C)", min_value=0.01, value=1.0)
+        C = st.number_input("Inverse of regularization strength (C)", min_value=0.01, value=1.0)
         max_iter = st.number_input("Max iterations", min_value=10, value=100, step=10)
         model = LogisticRegression(C=C, max_iter=int(max_iter))
     else:
@@ -238,12 +237,10 @@ if uploaded_file:
     if model_type == "Classification":
         acc = accuracy_score(y_test, y_pred)
         st.write(f"Accuracy: **{acc:.4f}**")
-
         cm = confusion_matrix(y_test, y_pred)
-        labels = sorted(y_clean := pd.unique(y_test)) if hasattr(y_test, "unique") else None
-        fig_cm = plot_confusion_matrix(cm, labels if labels is not None else range(cm.shape[0]))
+        labels = sorted(pd.unique(y_test))
+        fig_cm = plot_confusion_matrix(cm, labels)
         st.pyplot(fig_cm)
-
     else:
         r2 = r2_score(y_test, y_pred)
         mse = mean_squared_error(y_test, y_pred)
@@ -255,8 +252,8 @@ if uploaded_file:
         fig_reg = plot_regression_performance(y_test, y_pred)
         st.pyplot(fig_reg)
 
-    ## Optimize & Retrain (simple retrain button)
-    st.header("Optimize & Re-train")
+    ## Optimize & Retrain (simple retrain)
+    st.header("Optimize & Retrain")
 
     if st.button("Retrain model with current parameters"):
         with st.spinner("Retraining..."):
@@ -266,14 +263,13 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"Retraining error: {e}")
 
-    ## Display Automated EDA Profile
+    ## Automated EDA Profiling
     st.header("Automated EDA Profiling Report")
     profile = ProfileReport(df_clean, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
 
 else:
     st.info("Upload a data file to start the analysis.")
-
 
 # Helper plotting functions
 def plot_confusion_matrix(cm, labels):
@@ -284,7 +280,6 @@ def plot_confusion_matrix(cm, labels):
     ax.set_ylabel("True")
     ax.set_title("Confusion Matrix")
     return fig
-
 
 def plot_regression_performance(y_true, y_pred):
     fig, ax = plt.subplots(figsize=(6,6))
