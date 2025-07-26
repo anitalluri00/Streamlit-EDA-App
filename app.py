@@ -145,7 +145,7 @@ if uploaded_file:
     st.header("Clean & Preprocess Data")
     drop_dupes = st.checkbox("Drop duplicates", value=True)
     missing_strategy = st.selectbox(
-        "Missing value handling strategy",
+        "Missing value handling",
         ("Drop rows", "Fill with mean/mode", "Do nothing"),
         index=1
     )
@@ -192,7 +192,7 @@ if uploaded_file:
     try:
         X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size, random_state=random_state)
     except Exception as e:
-        st.error(f"Error splitting data: {e}")
+        st.error(f"Error splitting  {e}")
         st.stop()
 
     st.write(f"Training set size: {X_train.shape}, Test set size: {X_test.shape}")
@@ -270,22 +270,3 @@ if uploaded_file:
 
 else:
     st.info("Upload a data file to start the analysis.")
-
-# Helper plotting functions
-def plot_confusion_matrix(cm, labels):
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
-                xticklabels=labels, yticklabels=labels, ax=ax)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("True")
-    ax.set_title("Confusion Matrix")
-    return fig
-
-def plot_regression_performance(y_true, y_pred):
-    fig, ax = plt.subplots(figsize=(6,6))
-    ax.scatter(y_true, y_pred, alpha=0.6)
-    ax.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], "r--")
-    ax.set_xlabel("Actual")
-    ax.set_ylabel("Predicted")
-    ax.set_title("Actual vs Predicted")
-    return fig
