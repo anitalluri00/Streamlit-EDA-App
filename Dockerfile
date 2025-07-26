@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install Java Runtime for tabula-py (PDF support), plus build-essentials for dependencies
+# Install Java Runtime for tabula-py (PDF support) and build-essentials for dependencies
 RUN apt-get update && apt-get install -y \
     default-jre \
     build-essential \
