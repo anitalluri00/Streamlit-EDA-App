@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import tempfile
 import io
+import os  # Added import for os.path.splitext
 
 from ydata_profiling import ProfileReport
 from streamlit_pandas_profiling import st_profile_report
@@ -66,7 +67,7 @@ def read_file(uploaded_file, ext):
             if not dfs:
                 raise ValueError("No tables found in PDF file.")
             df_pdf = dfs[0]
-            # Convert object columns to string for compatibility
+            # Convert object dtype columns to string to avoid PyArrow issues
             for col in df_pdf.select_dtypes(include=['object']).columns:
                 df_pdf[col] = df_pdf[col].astype(str)
             return df_pdf
@@ -89,6 +90,7 @@ def clean_data(df, drop_duplicates, missing_strategy):
 def encode_features(df, cat_cols):
     if not cat_cols:
         return df
+    # fixed sparse argument as per sklearn v1.2+: use sparse_output=False
     encoder = OneHotEncoder(drop='first', sparse_output=False)
     encoded = encoder.fit_transform(df[cat_cols])
     encoded_df = pd.DataFrame(encoded, columns=encoder.get_feature_names_out(cat_cols), index=df.index)
@@ -117,7 +119,7 @@ def plot_regression_performance(y_true, y_pred):
 uploaded_file = st.file_uploader("Upload your data file", type=[k[1:] for k in SUPPORTED.keys()])
 
 if uploaded_file:
-    _, ext = tempfile.os.path.splitext(uploaded_file.name)
+    _, ext = os.path.splitext(uploaded_file.name)  # fixed: use os.path.splitext, not tempfile.os.path.splitext
     ext = ext.lower()
     st.success(f"Uploaded file: **{uploaded_file.name}** ({SUPPORTED.get(ext, ext)})")
 
@@ -127,8 +129,9 @@ if uploaded_file:
         st.error(f"Error reading file: {e}")
         st.stop()
 
-    ## Load & Inspect Data
+    # --- Load & Inspect Data ---
     st.header("Load & Inspect Data")
+
     st.subheader("Data Preview (.head())")
     st.dataframe(df.head())
 
@@ -141,21 +144,24 @@ if uploaded_file:
     st.subheader("Descriptive Statistics (.describe())")
     st.dataframe(df.describe(include="all").transpose())
 
-    ## Clean & Preprocess
+    # --- Clean & Preprocess ---
     st.header("Clean & Preprocess Data")
+
     drop_dupes = st.checkbox("Drop duplicates", value=True)
     missing_strategy = st.selectbox(
-        "Missing value handling",
+        "Missing value handling strategy",
         ("Drop rows", "Fill with mean/mode", "Do nothing"),
         index=1
     )
     df_clean = clean_data(df.copy(), drop_dupes, missing_strategy)
     st.write(f"Data shape after cleaning: {df_clean.shape}")
+
     st.subheader("Missing Values After Cleaning")
     st.dataframe(df_clean.isnull().sum())
 
-    ## Feature Selection & Engineering
+    # --- Feature Selection & Engineering ---
     st.header("Feature Selection & Engineering")
+
     all_columns = list(df_clean.columns)
     target_col = st.selectbox("Select target column", all_columns)
 
@@ -164,7 +170,6 @@ if uploaded_file:
         [col for col in all_columns if col != target_col],
         default=[col for col in all_columns if col != target_col]
     )
-
     if not feature_cols:
         st.warning("Please select at least one feature column.")
         st.stop()
@@ -172,7 +177,7 @@ if uploaded_file:
     cat_cols = [col for col in feature_cols if df_clean[col].dtype == 'object']
     df_features = encode_features(df_clean[feature_cols].copy(), cat_cols)
 
-    # Optional feature engineering
+    # Optional feature engineering example
     st.subheader("Optional Feature Engineering")
     add_feature = st.checkbox("Add product of first two numeric features as new feature")
     if add_feature:
@@ -184,25 +189,25 @@ if uploaded_file:
         else:
             st.info("Not enough numeric features to create new feature")
 
-    ## Split Data
+    # --- Split Data ---
     st.header("Split Data")
-    test_size = st.slider("Test data ratio", 0.1, 0.5, 0.25)
+    test_size = st.slider("Test data split ratio", 0.1, 0.5, 0.25)
     random_state = st.number_input("Random seed", value=42, step=1, format='%d')
 
     try:
-        X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size, random_state=random_state)
+        X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size,
+                                                            random_state=random_state)
     except Exception as e:
-        st.error(f"Error splitting  {e}")
+        st.error(f"Error splitting data: {e}")
         st.stop()
 
     st.write(f"Training set size: {X_train.shape}, Test set size: {X_test.shape}")
 
-    ## Select & Train ML Algorithm
+    # --- Select & Train ML Algorithm ---
     st.header("Select & Train ML Model")
     model_type = st.selectbox("Choose model type", ["Classification", "Regression"])
 
     model = None
-
     if model_type == "Classification":
         st.write("Using Logistic Regression")
         C = st.number_input("Inverse of regularization strength (C)", min_value=0.01, value=1.0)
@@ -223,7 +228,7 @@ if uploaded_file:
             st.error(f"Model training error: {e}")
             st.stop()
 
-    ## Make Predictions
+    # --- Make Predictions ---
     st.header("Make Predictions")
     try:
         y_pred = model.predict(X_test)
@@ -231,14 +236,14 @@ if uploaded_file:
         st.error(f"Prediction error: {e}")
         st.stop()
 
-    ## Evaluate Accuracy
+    # --- Evaluate Accuracy ---
     st.header("Evaluate Model Performance")
-
     if model_type == "Classification":
         acc = accuracy_score(y_test, y_pred)
         st.write(f"Accuracy: **{acc:.4f}**")
-        cm = confusion_matrix(y_test, y_pred)
+
         labels = sorted(pd.unique(y_test))
+        cm = confusion_matrix(y_test, y_pred)
         fig_cm = plot_confusion_matrix(cm, labels)
         st.pyplot(fig_cm)
     else:
@@ -252,9 +257,8 @@ if uploaded_file:
         fig_reg = plot_regression_performance(y_test, y_pred)
         st.pyplot(fig_reg)
 
-    ## Optimize & Retrain (simple retrain)
+    # --- Optimize & Retrain ---
     st.header("Optimize & Retrain")
-
     if st.button("Retrain model with current parameters"):
         with st.spinner("Retraining..."):
             try:
@@ -263,7 +267,7 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"Retraining error: {e}")
 
-    ## Automated EDA Profiling
+    # --- Automated EDA Profiling ---
     st.header("Automated EDA Profiling Report")
     profile = ProfileReport(df_clean, title="YData Profiling Report", explorative=True)
     st_profile_report(profile)
