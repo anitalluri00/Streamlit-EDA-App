@@ -97,7 +97,6 @@ if uploaded_file:
 
     # --- Load & Inspect Data ---
     st.header("Load & Inspect Data")
-
     st.subheader("Data Preview (.head())")
     st.dataframe(df.head())
 
@@ -112,7 +111,6 @@ if uploaded_file:
 
     # --- Clean & Preprocess ---
     st.header("Clean & Preprocess Data")
-
     drop_dupes = st.checkbox("Drop duplicates", value=True)
     missing_strategy = st.selectbox(
         "Missing value handling strategy",
@@ -127,7 +125,6 @@ if uploaded_file:
 
     # --- Feature Selection & Engineering ---
     st.header("Feature Selection & Engineering")
-
     all_columns = list(df_clean.columns)
     target_col = st.selectbox("Select target column", all_columns)
 
@@ -140,8 +137,13 @@ if uploaded_file:
         st.warning("Please select at least one feature column.")
         st.stop()
 
+    # ENFORCE ALL FEATURE COLUMN NAMES TO STRING TYPE (preempt sklearn error)
+    feature_cols = [str(col) for col in feature_cols]
+    df_clean.columns = df_clean.columns.astype(str)
+
     cat_cols = [col for col in feature_cols if df_clean[col].dtype == 'object']
     df_features = encode_features(df_clean[feature_cols].copy(), cat_cols)
+    df_features.columns = df_features.columns.astype(str)  # Ensures all columns as str
 
     # Optional feature engineering example
     st.subheader("Optional Feature Engineering")
@@ -161,8 +163,13 @@ if uploaded_file:
     random_state = st.number_input("Random seed", value=42, step=1, format='%d')
 
     try:
-        X_train, X_test, y_train, y_test = train_test_split(df_features, df_clean[target_col], test_size=test_size,
-                                                            random_state=random_state)
+        X_train, X_test, y_train, y_test = train_test_split(
+            df_features, df_clean[target_col],
+            test_size=test_size, random_state=random_state
+        )
+        # Ensure all train/test sets have string columns (for sklearn > 1.2)
+        X_train.columns = X_train.columns.astype(str)
+        X_test.columns = X_test.columns.astype(str)
     except Exception as e:
         st.error(f"Error splitting data: {e}")
         st.stop()
@@ -207,8 +214,9 @@ if uploaded_file:
     if model_type == "Classification":
         acc = accuracy_score(y_test, y_pred)
         st.write(f"Accuracy: **{acc:.4f}**")
+        # All labels as strings to prevent mathtext issues
         labels = sorted([str(l) for l in pd.unique(y_test)])
-        cm = confusion_matrix(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred, labels=labels)
         fig_cm = plot_confusion_matrix(cm, labels)
         st.pyplot(fig_cm)
     else:
