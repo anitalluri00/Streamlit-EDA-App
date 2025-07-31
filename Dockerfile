@@ -1,8 +1,7 @@
 FROM python:3.10-slim
 
-# Install Java Runtime for tabula-py (PDF support) and build-essentials for dependencies
+# Install build-essential & libpq-dev for some Python deps
 RUN apt-get update && apt-get install -y \
-    default-jre \
     build-essential \
     libpq-dev \
  && apt-get clean
