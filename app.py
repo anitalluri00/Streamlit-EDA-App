@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import tempfile
 import io
 import os
 
@@ -16,27 +15,17 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import accuracy_score, confusion_matrix, r2_score, mean_squared_error
 
-try:
-    import tabula
-except ImportError:
-    st.error("Please install 'tabula-py' to enable PDF file support (`pip install tabula-py`).")
-    st.stop()
-
 SUPPORTED = {
     ".csv": "CSV",
     ".xlsx": "Excel (xlsx)",
-    ".xls": "Excel (xls)",
-    ".txt": "Text",
-    ".tsv": "TSV",
-    ".json": "JSON",
-    ".pdf": "PDF"
+    ".xls": "Excel (xls)"
 }
 
 st.set_page_config(page_title="Complete EDA + ML Streamlit App", layout="wide")
 st.title("Complete Data Science Pipeline with EDA and ML")
 st.markdown(
     """
-    Upload your dataset (CSV, XLSX, XLS, JSON, TXT, TSV, PDF with tables) and perform full EDA, preprocessing,
+    Upload your dataset (**CSV, XLSX, XLS only**) and perform full EDA, preprocessing,
     training, prediction, evaluation, and visualization directly in this app.
     """
 )
@@ -48,27 +37,6 @@ def read_file(uploaded_file, ext):
         return pd.read_excel(uploaded_file, engine="openpyxl")
     elif ext == ".xls":
         return pd.read_excel(uploaded_file, engine="xlrd")
-    elif ext == ".tsv":
-        return pd.read_csv(uploaded_file, sep="\t")
-    elif ext == ".json":
-        return pd.read_json(uploaded_file)
-    elif ext == ".txt":
-        try:
-            return pd.read_csv(uploaded_file, sep=None, engine="python")
-        except:
-            uploaded_file.seek(0)
-            return pd.read_table(uploaded_file)
-    elif ext == ".pdf":
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp.flush()
-            dfs = tabula.read_pdf(tmp.name, pages="all", multiple_tables=True)
-            if not dfs:
-                raise ValueError("No tables found in PDF file.")
-            df_pdf = dfs[0]
-            for col in df_pdf.select_dtypes(include=['object']).columns:
-                df_pdf[col] = df_pdf[col].astype(str)
-            return df_pdf
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
@@ -97,12 +65,11 @@ def encode_features(df, cat_cols):
 
 def plot_confusion_matrix(cm, labels):
     fig, ax = plt.subplots(figsize=(6,5))
-    # Always convert labels to str: robust against any input, avoids mathtext parsing
     str_labels = [str(l) for l in labels]
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False,
                 xticklabels=str_labels, yticklabels=str_labels, ax=ax)
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('True')
+    ax.set_xlabel('Predicted', fontsize=12)
+    ax.set_ylabel('True', fontsize=12)
     ax.set_title('Confusion Matrix')
     return fig
 
@@ -130,6 +97,7 @@ if uploaded_file:
 
     # --- Load & Inspect Data ---
     st.header("Load & Inspect Data")
+
     st.subheader("Data Preview (.head())")
     st.dataframe(df.head())
 
@@ -144,6 +112,7 @@ if uploaded_file:
 
     # --- Clean & Preprocess ---
     st.header("Clean & Preprocess Data")
+
     drop_dupes = st.checkbox("Drop duplicates", value=True)
     missing_strategy = st.selectbox(
         "Missing value handling strategy",
@@ -158,6 +127,7 @@ if uploaded_file:
 
     # --- Feature Selection & Engineering ---
     st.header("Feature Selection & Engineering")
+
     all_columns = list(df_clean.columns)
     target_col = st.selectbox("Select target column", all_columns)
 
@@ -173,6 +143,7 @@ if uploaded_file:
     cat_cols = [col for col in feature_cols if df_clean[col].dtype == 'object']
     df_features = encode_features(df_clean[feature_cols].copy(), cat_cols)
 
+    # Optional feature engineering example
     st.subheader("Optional Feature Engineering")
     add_feature = st.checkbox("Add product of first two numeric features as new feature")
     if add_feature:
@@ -236,7 +207,7 @@ if uploaded_file:
     if model_type == "Classification":
         acc = accuracy_score(y_test, y_pred)
         st.write(f"Accuracy: **{acc:.4f}**")
-        labels = [str(l) for l in pd.unique(y_test)]
+        labels = sorted([str(l) for l in pd.unique(y_test)])
         cm = confusion_matrix(y_test, y_pred)
         fig_cm = plot_confusion_matrix(cm, labels)
         st.pyplot(fig_cm)
@@ -265,4 +236,4 @@ if uploaded_file:
     st_profile_report(profile)
 
 else:
-    st.info("Upload a data file to start the analysis.")
+    st.info("Upload a data file (CSV or Excel only) to start the analysis.")
