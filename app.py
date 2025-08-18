@@ -49,19 +49,21 @@ def clean_data(df, drop_duplicates, missing_strategy):
             if pd.api.types.is_numeric_dtype(df[col]):
                 df[col] = df[col].fillna(df[col].mean())
             else:
-                if df[col].dropna().empty:
-                    df[col] = df[col].fillna("Unknown")
+                mode_val = df[col].mode()
+                if not mode_val.empty:
+                    df[col] = df[col].fillna(mode_val[0])
                 else:
-                    df[col] = df[col].fillna(df[col].mode(dropna=True).iloc[0])
+                    df[col] = df[col].fillna("Unknown")
     return df
 
 def encode_features(df, cat_cols):
     if not cat_cols:
         return df
     try:
-        encoder = OneHotEncoder(drop='first', sparse_output=False)  # sklearn >= 1.2
+        encoder = OneHotEncoder(drop='first', sparse_output=False)
     except TypeError:
-        encoder = OneHotEncoder(drop='first', sparse=False)  # backward compatibility
+        encoder = OneHotEncoder(drop='first', sparse=False)
+    
     encoded = encoder.fit_transform(df[cat_cols])
     encoded_df = pd.DataFrame(encoded, columns=encoder.get_feature_names_out(cat_cols), index=df.index)
     df = df.drop(columns=cat_cols)
@@ -155,6 +157,10 @@ if uploaded_file:
     st.header("Split Data")
     test_size = st.slider("Test data split ratio", 0.1, 0.5, 0.25)
     random_state = st.number_input("Random seed", value=42, step=1)
+    
+    # Check if target column is numeric for regression, otherwise use classification
+    is_regression = pd.api.types.is_numeric_dtype(df_clean[target_col])
+    
     X_train, X_test, y_train, y_test = train_test_split(
         df_features, df_clean[target_col], test_size=test_size, random_state=random_state
     )
@@ -165,8 +171,8 @@ if uploaded_file:
 
     # Train Model
     st.header("Select & Train ML Model")
-    model_type = st.selectbox("Choose model type", ["Classification", "Regression"])
-
+    model_type = st.selectbox("Choose model type", ["Regression", "Classification"]) if is_regression else st.selectbox("Choose model type", ["Classification"])
+    
     if model_type == "Classification":
         C = st.number_input("Inverse of regularization strength (C)", min_value=0.01, value=1.0)
         max_iter = st.number_input("Max iterations", min_value=10, value=100, step=10)
