@@ -1,10 +1,9 @@
-streamlit>=1.25
-pandas>=1.5
-numpy>=1.23
-matplotlib>=3.5
-seaborn>=0.12
+streamlit>=1.10
+pandas>=1.3
+numpy>=1.21
 plotly>=5.0
-scikit-learn>=1.1
+seaborn>=0.11
+matplotlib>=3.4
+scikit-learn>=1.0
+scipy>=1.7
 openpyxl
-xlrd
-scipy
