@@ -1,489 +1,477 @@
-"""
-Streamlit EDA + Feature Engineering + Quick ML pipeline
-Single-file app: app.py
-Supports .csv, .xlsx, .xls uploads.
-
-Usage: streamlit run app.py
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
+import plotly.express as px
+import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import seaborn as sns
-import plotly.express as px
+from io import BytesIO
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler, MinMaxScaler
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.impute import SimpleImputer
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.feature_selection import SelectKBest, f_classif, f_regression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, mean_squared_error, r2_score, accuracy_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+from scipy import stats
 import base64
-import warnings
-warnings.filterwarnings("ignore")
+import os
 
-st.set_page_config(layout="wide", page_title="Full EDA Flow — single app", page_icon="📊")
-st.title("📊 Full EDA + Feature Engineering + Quick ML — single `app.py`")
-st.markdown("Upload your dataset (`.csv`, `.xlsx`, `.xls`) and walk through an end-to-end EDA process.")
+st.set_page_config(page_title="Full EDA — Single app.py", layout="wide")
 
-# ---------------------------
-# Utility helpers
-# ---------------------------
+# --- Styling / neat background UI ---
+st.markdown(
+    """
+    <style>
+    .stApp { 
+      background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      color: #0f172a;
+    }
+    .sidebar .sidebar-content {
+      background: linear-gradient(180deg, #ffffffcc, #f1f5f9cc);
+      backdrop-filter: blur(5px);
+    }
+    .big-font { font-size:18px !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Helper utilities -----------------------------------------------------------
+@st.cache_data
 def load_file(uploaded_file):
-    fname = uploaded_file.name.lower()
-    if fname.endswith(".csv"):
+    name = uploaded_file.name.lower()
+    if name.endswith('.csv'):
         return pd.read_csv(uploaded_file)
-    elif fname.endswith((".xls", ".xlsx")):
+    elif name.endswith('.xlsx') or name.endswith('.xls'):
         return pd.read_excel(uploaded_file)
     else:
-        st.error("Unsupported file type. Upload CSV/XLS/XLSX.")
-        return None
+        raise ValueError('Unsupported file type. Upload .csv, .xlsx or .xls')
 
-def get_column_types(df, thresh=0.05):
-    """Return lists of numeric and categorical columns. thresh is fraction unique cutoff for numeric->categorical"""
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    # But numeric-like but with few unique values might be categorical
-    cat_from_num = [c for c in num_cols if df[c].nunique() / len(df) < thresh]
-    num_cols = [c for c in num_cols if c not in cat_from_num]
-    cat_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist() + cat_from_num
-    # remove duplicates and keep order
-    cat_cols = list(dict.fromkeys(cat_cols))
-    num_cols = list(dict.fromkeys(num_cols))
-    return cat_cols, num_cols
+def detect_columns(df, cat_threshold=0.05):
+    """Return lists of categorical and numerical column names.
+    cat_threshold: fraction of unique values threshold to treat numeric-like as categorical.
+    """
+    numerical = df.select_dtypes(include=[np.number]).columns.tolist()
+    non_numeric = df.select_dtypes(exclude=[np.number]).columns.tolist()
 
-def quick_download_link(df, filename="cleaned.csv"):
-    csv = df.to_csv(index=False).encode()
-    b64 = base64.b64encode(csv).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+    # Some numeric-looking columns might be categorical (e.g., small unique counts)
+    for col in numerical[:]:
+        num_unique = df[col].nunique(dropna=True)
+        if num_unique / len(df) < cat_threshold or num_unique < 10:
+            # treat as categorical
+            numerical.remove(col)
+            non_numeric.append(col)
+    return sorted(non_numeric), sorted(numerical)  # categorical, numerical
+
+def quick_checks(df):
+    checks = {
+        'shape': df.shape,
+        'size': df.size,
+        'len (rows)': len(df),
+        'head': df.head(),
+        'tail': df.tail(),
+        'info': df.info(buf=None)
+    }
+    return checks
+
+def missing_value_table(df):
+    mis_val = df.isnull().sum()
+    mis_val_percent = 100 * mis_val / len(df)
+    mz = pd.concat([mis_val, mis_val_percent], axis=1)
+    mz.columns = ['missing_count', 'missing_percent']
+    mz = mz[mz['missing_count'] > 0].sort_values('missing_percent', ascending=False)
+    return mz
+
+def clean_punctuation_in_numeric(df, cols):
+    """Attempt to remove commas, $ signs etc from numeric columns and coerce to numeric."""
+    for c in cols:
+        if df[c].dtype == object or df[c].dtype == 'O':
+            df[c] = df[c].astype(str).str.replace(r'[,$%]', '', regex=True).str.strip()
+            coerced = pd.to_numeric(df[c], errors='coerce')
+            if coerced.notna().sum() > 0:
+                df[c] = coerced
+    return df
+
+def frequency_table(df, col):
+    freq = df[col].value_counts(dropna=False)
+    rel = df[col].value_counts(normalize=True, dropna=False).round(4)
+    return pd.concat([freq, rel], axis=1).rename(columns={col: 'frequency', 0: 'relative'})
+
+def statistical_summary(df, numerical_cols):
+    return df[numerical_cols].describe().T
+
+def plot_histogram(df, col, bins=30):
+    fig = px.histogram(df, x=col, nbins=bins, marginal='box')
+    return fig
+
+def plot_box(df, col):
+    fig = px.box(df, y=col, points='outliers')
+    return fig
+
+def iqr_treatment(series, factor=1.5):
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - factor * iqr
+    upper = q3 + factor * iqr
+    return lower, upper
+
+def zscore_treatment(series, threshold=3):
+    z = np.abs(stats.zscore(series.dropna()))
+    return z > threshold
+
+def download_link(df, filename='cleaned.csv'):
+    towrite = BytesIO()
+    if filename.endswith('.csv'):
+        df.to_csv(towrite, index=False)
+    else:
+        df.to_excel(towrite, index=False)
+    towrite.seek(0)
+    b64 = base64.b64encode(towrite.read()).decode()
+    href = f"data:application/octet-stream;base64,{b64}"
     return href
 
-# ---------------------------
-# Sidebar - file upload & options
-# ---------------------------
-st.sidebar.header("1) Upload & options")
-uploaded_file = st.sidebar.file_uploader("Upload CSV / XLSX / XLS", type=['csv','xlsx','xls'])
-sample_data = st.sidebar.checkbox("Use sample dataset (Iris)", value=False)
 
-if sample_data and uploaded_file is None:
-    from sklearn.datasets import load_iris
-    iris = load_iris(as_frame=True)
-    df = iris.frame
-    if 'target' in df.columns:
-        df.rename(columns={'target': 'species'}, inplace=True)
-    st.sidebar.success("Loaded iris sample dataset.")
-elif uploaded_file:
-    df = load_file(uploaded_file)
-else:
-    st.info("Upload a dataset or check 'Use sample dataset'.")
-    st.stop()
+# --- Sidebar: file upload + options ----------------------------------------
+st.sidebar.title('Upload & Options')
+uploaded_file = st.sidebar.file_uploader('Upload .csv / .xlsx / .xls', type=['csv', 'xlsx', 'xls'])
 
-# Make a copy to operate on
-df_original = df.copy()
-st.write("### Quick data preview")
-st.dataframe(df_original.head())
+if uploaded_file is not None:
+    try:
+        df = load_file(uploaded_file)
+    except Exception as e:
+        st.sidebar.error(f'Error reading file: {e}')
+        st.stop()
 
-# ---------------------------
-# 2) Column detection
-# ---------------------------
-st.sidebar.header("2) Column detection")
-cat_cols, num_cols = get_column_types(df)
-st.sidebar.write("Detected categorical columns:", cat_cols)
-st.sidebar.write("Detected numerical columns:", num_cols)
+    st.sidebar.success('File loaded — nice.')
+    st.sidebar.write('Rows:', df.shape[0], 'Columns:', df.shape[1])
 
-# Allow user to override
-st.sidebar.header("Override column types (optional)")
-user_cat = st.sidebar.multiselect("Force categorical columns", options=df.columns.tolist(), default=cat_cols)
-user_num = st.sidebar.multiselect("Force numerical columns", options=[c for c in df.columns.tolist() if c not in user_cat], default=num_cols)
+    # allow user to set threshold for numeric->categorical
+    cat_threshold = st.sidebar.slider('Categorical unique-value threshold (fraction of rows)', 0.01, 0.2, 0.05)
+    cat_cols, num_cols = detect_columns(df, cat_threshold=cat_threshold)
 
-cat_cols = user_cat
-num_cols = user_num
+    st.sidebar.write('Detected categorical columns:', len(cat_cols))
+    st.sidebar.write('Detected numerical columns:', len(num_cols))
 
-# ---------------------------
-# Quick checks
-# ---------------------------
-st.header("=========== EDA Steps ============")
-st.subheader("----------- DATA cleaning and ANALYSIS -------------")
-st.markdown("**Quick checks**")
-c1, c2, c3, c4 = st.columns([1,1,1,2])
-c1.metric("Rows", df.shape[0])
-c2.metric("Columns", df.shape[1])
-c3.metric("Size (cells)", df.size)
-with c4:
-    st.write("Data types:")
-    st.write(df.dtypes)
+    # --- Main app body ------------------------------------------------------
+    st.title('Full EDA pipeline — single-file Streamlit app')
+    st.markdown('Follow the sections on the left; everything runs live.')
 
-st.write("**Head (5 rows)**")
-st.dataframe(df.head())
-st.write("**Tail (5 rows)**")
-st.dataframe(df.tail())
+    # SECTION 1: Read the data ------------------------------------------------
+    st.header('1) Read the data')
+    st.markdown(f'**File name:** {uploaded_file.name} — **shape:** {df.shape}')
+    if st.checkbox('Show raw data (first 200 rows)'):
+        st.dataframe(df.head(200))
 
-st.write("**Info and memory**")
-buf = io.StringIO()
-df.info(buf=buf)
-s = buf.getvalue()
-st.text(s)
+    # SECTION 2: Create categorical and numerical columns ---------------------
+    st.header('2) Create categorical and numerical column lists')
+    st.write('Categorical columns detected (sample):')
+    st.write(cat_cols[:20])
+    st.write('Numerical columns detected (sample):')
+    st.write(num_cols[:20])
 
-# ---------------------------
-# 4) Missing value analysis
-# ---------------------------
-st.subheader("4) Missing value analysis")
-miss = df.isnull().sum().sort_values(ascending=False)
-miss = miss[miss > 0]
-if miss.empty:
-    st.success("No missing values detected.")
-else:
-    st.write("Columns with missing values (count):")
-    st.dataframe(miss)
-    st.write("Missing value percentage:")
-    miss_pct = (df.isnull().sum() / len(df) * 100).sort_values(ascending=False)
-    st.dataframe(miss_pct[miss_pct>0])
+    # SECTION 3: Quick checks -------------------------------------------------
+    st.header('3) Data quick checks')
+    st.subheader('A) shape  B) size  C) len  D) head  E) tail  F) info')
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write('shape: ', df.shape)
+        st.write('size: ', df.size)
+        st.write('len (rows): ', len(df))
+    with c2:
+        st.write('head:')
+        st.dataframe(df.head())
+        st.write('tail:')
+        st.dataframe(df.tail())
 
-    st.write("Missing patterns (heatmap)")
-    fig, ax = plt.subplots(figsize=(10,3))
-    sns.heatmap(df.isnull(), cbar=False)
-    st.pyplot(fig)
+    buffer = BytesIO()
+    df.info(buf=buffer)
+    s = buffer.getvalue().decode()
+    st.text('info:\n' + s)
 
-# ---------------------------
-# 5) Data quality checks / cleaning heuristics
-# ---------------------------
-st.subheader("5) Data quality checks / Cleaning")
-st.markdown("""
-The app will attempt to:
-- Trim whitespace from string columns
-- Remove unprintable characters
-- Attempt to coerce numeric columns where possible
-- Report suspicious columns (mixed types / punctuation in numeric columns)
-""")
+    # SECTION 4: Missing value analysis -------------------------------------
+    st.header('4) Missing value analysis')
+    mis_table = missing_value_table(df)
+    if mis_table.empty:
+        st.success('No missing values detected!')
+    else:
+        st.dataframe(mis_table)
+        fig = px.bar(mis_table.reset_index(), x='index', y='missing_percent', title='Missing % by column')
+        st.plotly_chart(fig, use_container_width=True)
 
-if st.button("Run automatic cleaning heuristics"):
-    df = df.copy()
-    # Trim and clean strings
-    for c in df.select_dtypes(include=['object','category']).columns:
-        df[c] = df[c].astype(str).str.strip()
-        df[c] = df[c].str.replace(r'[\r\n\t]+', ' ', regex=True)
-        df[c] = df[c].replace({'': np.nan})
-    # Try coercing numeric-like columns
-    for c in df.columns:
-        if c in num_cols:
-            # attempt to remove commas and currency symbols
-            df[c] = df[c].astype(str).str.replace(r'[^\d\.\-eE]', '', regex=True)
-            df[c] = pd.to_numeric(df[c], errors='coerce')
-    st.success("Automatic cleaning applied. Re-detect columns in the sidebar if desired.")
-    st.write(df.head())
+    # SECTION 5: Data quality checks / cleaning -------------------------------
+    st.header('5) Data quality checks / cleaning')
+    st.markdown('Common problems: punctuation in numeric columns, mixed types, stray whitespace, inconsistent categories.')
 
-# Detect columns with mixed types or punctuation
-st.write("Columns with mixed types or suspicious entries (sample):")
-mixed = []
-for c in df.columns:
-    num = pd.to_numeric(df[c], errors='coerce')
-    if num.isnull().any() and df[c].dtype == object:
-        sample_bad = df[c].loc[num.isnull()].dropna().unique()[:5]
-        if len(sample_bad)>0:
-            mixed.append((c, sample_bad))
-if mixed:
-    for c, samp in mixed:
-        st.write(f"- {c}: examples -> {samp}")
-else:
-    st.write("No obvious mixed-type columns detected.")
+    if st.button('Run automatic cleaning attempts'):
+        before = df.copy()
+        # strip whitespace
+        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        # try remove punctuation from numeric-looking object columns
+        df = clean_punctuation_in_numeric(df, df.columns)
+        st.success('Automatic cleaning attempted (stripping whitespace, removing $ , % from object cols and coercing).')
+        st.experimental_rerun()
 
-# ---------------------------
-# 6) Categorical column analysis
-# ---------------------------
-st.subheader("6) Categorical column analysis")
-if len(cat_cols)==0:
-    st.info("No categorical columns detected. You can force columns in the sidebar.")
-else:
-    cat_to_analyze = st.selectbox("Choose categorical column to analyze", options=cat_cols)
-    if cat_to_analyze:
-        st.write("Frequency table")
-        freq = df[cat_to_analyze].value_counts(dropna=False)
+    st.write('Preview of data types after any cleaning:')
+    st.dataframe(pd.DataFrame({'column': df.columns, 'dtype': df.dtypes.values}))
+
+    # allow manual fixes: choose a column and force type
+    st.subheader('Manual type casting')
+    col_to_cast = st.selectbox('Select column to cast (optional)', options=['-- none --'] + list(df.columns))
+    if col_to_cast and col_to_cast != '-- none --':
+        to_type = st.selectbox('Cast to type', options=['int', 'float', 'str', 'category', 'datetime'])
+        if st.button('Apply cast'):
+            try:
+                if to_type == 'datetime':
+                    df[col_to_cast] = pd.to_datetime(df[col_to_cast], errors='coerce')
+                elif to_type == 'category':
+                    df[col_to_cast] = df[col_to_cast].astype('category')
+                else:
+                    df[col_to_cast] = df[col_to_cast].astype(to_type)
+                st.success(f'Column {col_to_cast} cast to {to_type}.')
+            except Exception as e:
+                st.error(f'Failed to cast: {e}')
+
+    # SECTION 6: Categorical column analysis ---------------------------------
+    st.header('6) Categorical column analysis')
+    cat_choice = st.selectbox('Choose a categorical column to analyze', options=['-- none --'] + cat_cols)
+    if cat_choice and cat_choice != '-- none --':
+        st.subheader('A) Frequency table  B) Relative frequency')
+        freq = df[cat_choice].value_counts(dropna=False).rename_axis(cat_choice).reset_index(name='counts')
+        freq['relative'] = (freq['counts'] / len(df)).round(4)
         st.dataframe(freq)
-        st.write("Relative frequency (%)")
-        rel = df[cat_to_analyze].value_counts(normalize=True, dropna=False)*100
-        st.dataframe(rel.round(3))
-        # Bar chart
-        st.write("Bar chart (top 20)")
-        fig = px.bar(x=freq.index[:20].astype(str), y=freq.values[:20], labels={'x':cat_to_analyze, 'y':'count'}, title=f"Bar chart of {cat_to_analyze}")
-        st.plotly_chart(fig, use_container_width=True)
-        # Pie chart
-        st.write("Pie chart (top 10)")
-        fig2 = px.pie(names=freq.index[:10].astype(str), values=freq.values[:10], title=f"Pie chart of {cat_to_analyze}")
-        st.plotly_chart(fig2, use_container_width=True)
-        st.write("Understanding / notes:")
-        st.write(f"- Column `{cat_to_analyze}` has {df[cat_to_analyze].nunique()} unique values.")
-        st.write("- Check for high-cardinality (many unique categories) which may require grouping/embedding rather than one-hot encoding.")
-        st.write("- Check frequent vs rare categories: rare categories may need to be grouped as 'Other'.")
 
-# ---------------------------
-# 7) Numerical column analysis
-# ---------------------------
-st.subheader("7) Numerical column analysis")
-if len(num_cols)==0:
-    st.info("No numerical columns detected. You can force columns in the sidebar.")
-else:
-    num_to_analyze = st.selectbox("Choose numerical column to analyze", options=num_cols)
-    if num_to_analyze:
-        st.write("Statistical summary")
-        st.dataframe(df[num_to_analyze].describe().to_frame().T)
-        # Histogram + KDE
-        st.write("Histogram and density")
-        fig, ax = plt.subplots(figsize=(8,4))
-        sns.histplot(df[num_to_analyze].dropna(), kde=True)
-        st.pyplot(fig)
-        st.write("Data distribution notes:")
-        s = df[num_to_analyze].dropna()
-        skew = s.skew()
-        kurt = s.kurt()
-        st.write(f"- Skewness: {skew:.3f}  |  Kurtosis: {kurt:.3f}")
-        if abs(skew) > 1:
-            st.write("- Distribution is highly skewed; consider log / boxcox transformations.")
-        elif abs(skew) > 0.5:
-            st.write("- Moderate skewness.")
-        else:
-            st.write("- Approximately symmetric distribution.")
+        st.subheader('C) Bar chart  D) Pie chart')
+        fig_bar = px.bar(freq, x=cat_choice, y='counts', title=f'Bar chart for {cat_choice}')
+        fig_pie = px.pie(freq, names=cat_choice, values='counts', title=f'Pie chart for {cat_choice}')
+        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-# ---------------------------
-# 8) Outlier analysis
-# ---------------------------
-st.subheader("8) Outlier analysis")
-if len(num_cols) > 0:
-    cols_for_outlier = st.multiselect("Select numerical columns for outlier visualization", options=num_cols, default=num_cols[:3])
-    if cols_for_outlier:
-        fig, axes = plt.subplots(len(cols_for_outlier), 1, figsize=(10, 4*len(cols_for_outlier)))
-        if len(cols_for_outlier)==1:
-            axes = [axes]
-        for ax, c in zip(axes, cols_for_outlier):
-            sns.boxplot(x=df[c].dropna(), ax=ax)
-            ax.set_title(f"Boxplot for {c}")
-        st.pyplot(fig)
+        st.markdown('**Understanding (write-up):**')
+        st.write('Check the frequency table for dominant categories, rare levels, and potential typos (e.g., same category spelled differently). If one level dominates, consider grouping rare levels into `Other` for modeling. Also check if missing values are meaningful or simply absent.')
 
-        st.write("Outlier treatment options:")
-        outlier_method = st.selectbox("Treatment method", [
-            "None",
-            "Clip to percentiles (1st/99th)",
-            "Replace with median",
-            "Winsorize (1%)"
-        ])
-        if st.button("Apply outlier treatment"):
-            df = df.copy()
-            if outlier_method == "Clip to percentiles (1st/99th)":
-                for c in cols_for_outlier:
-                    low = df[c].quantile(0.01)
-                    high = df[c].quantile(0.99)
-                    df[c] = df[c].clip(lower=low, upper=high)
-            elif outlier_method == "Replace with median":
-                for c in cols_for_outlier:
-                    med = df[c].median()
-                    q1 = df[c].quantile(0.25)
-                    q3 = df[c].quantile(0.75)
-                    iqr = q3 - q1
-                    out_mask = (df[c] < q1 - 1.5*iqr) | (df[c] > q3 + 1.5*iqr)
-                    df.loc[out_mask, c] = med
-            elif outlier_method == "Winsorize (1%)":
-                for c in cols_for_outlier:
-                    low = df[c].quantile(0.01)
-                    high = df[c].quantile(0.99)
-                    df[c] = np.where(df[c] < low, low, df[c])
-                    df[c] = np.where(df[c] > high, high, df[c])
-            st.success("Outlier treatment applied.")
-            st.write(df[cols_for_outlier].describe())
+    # SECTION 7: Numerical column analysis ----------------------------------
+    st.header('7) Numerical column analysis')
+    num_choice = st.selectbox('Choose a numerical column to analyze', options=['-- none --'] + num_cols)
+    if num_choice and num_choice != '-- none --':
+        st.subheader('A) Statistical summary')
+        st.dataframe(statistical_summary(df, [num_choice]))
 
-# ---------------------------
-# 9) Bi-variate & Multi-variate analysis
-# ---------------------------
-st.subheader("9) Bivariate & Multivariate analysis")
-st.write("Correlation matrix (numerical columns)")
-if len(num_cols)>0:
-    corr_method = st.selectbox("Correlation method", options=["pearson", "spearman"], index=0)
-    corr = df[num_cols].corr(method=corr_method)
-    fig, ax = plt.subplots(figsize=(10,8))
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="vlag", ax=ax)
-    st.pyplot(fig)
-    st.write("Notes: correlation shows linear (pearson) or rank (spearman) relationships among numeric features.")
+        st.subheader('B) Histogram & distribution')
+        bins = st.slider('Bins for histogram', 5, 200, 30)
+        fig_hist = plot_histogram(df, num_choice, bins=bins)
+        st.plotly_chart(fig_hist, use_container_width=True)
 
-st.write("Pairwise scatter (select columns)")
-pair_cols = st.multiselect("Select up to 4 columns for pairplot/scatter matrix", options=num_cols, max_selections=4)
-if len(pair_cols)>=2:
-    sns_pair = sns.pairplot(df[pair_cols].dropna().sample(min(500, len(df))), diag_kind="kde", plot_kws={'s':20, 'alpha':0.6})
-    st.pyplot(sns_pair.fig)
+        st.markdown('**Understanding (write-up):**')
+        st.write('Look at mean vs median to judge skewness. Heavy tails and long right tails indicate positive skew; consider log-transform. Multimodal distributions may suggest mixed populations or data-entry problems.')
 
-# ---------------------------
-# Feature Engineering
-# ---------------------------
-st.header("------------- Feature Engineering -----------------")
-st.subheader("10) Encoding")
-st.write("Choose encoding strategy for categorical columns")
-encoding_choice = st.selectbox("Encoding", ["Label Encoding (good for ordinal or small cardinality)", "One-Hot Encoding (for nominal, beware high-cardinality)", "Leave as-is"], index=2)
-encode_cols = st.multiselect("Columns to encode", options=cat_cols, default=cat_cols[:3])
-if st.button("Apply encoding"):
-    df = df.copy()
-    if encoding_choice.startswith("Label"):
-        for c in encode_cols:
-            le = LabelEncoder()
-            df[c] = df[c].astype(str).fillna("NA")
-            df[c] = le.fit_transform(df[c])
-    elif encoding_choice.startswith("One-Hot"):
-        st.write("One-hot encoding may create many columns. Proceeding...")
-        df = pd.get_dummies(df, columns=encode_cols, dummy_na=True, drop_first=False)
-    st.success("Encoding applied.")
-    st.write("Data shape now:", df.shape)
+    # SECTION 8: Outlier analysis -------------------------------------------
+    st.header('8) Outlier analysis')
+    out_col = st.selectbox('Select numerical column for outlier check', options=['-- none --'] + num_cols, key='outcol')
+    if out_col and out_col != '-- none --':
+        st.subheader('A) Box plot')
+        fig_box = plot_box(df, out_col)
+        st.plotly_chart(fig_box, use_container_width=True)
 
-st.subheader("11) Scaling")
-st.write("Choose scaling for numeric columns")
-scaler_choice = st.selectbox("Scaling", ["None", "StandardScaler (zero mean unit variance)", "MinMaxScaler (0-1)"], index=0)
-scale_cols = st.multiselect("Numeric columns to scale", options=num_cols, default=num_cols[:4])
-if st.button("Apply scaling"):
-    df = df.copy()
-    if scaler_choice != "None":
-        if scaler_choice.startswith("Standard"):
-            scaler = StandardScaler()
-        else:
-            scaler = MinMaxScaler()
-        df[scale_cols] = scaler.fit_transform(df[scale_cols])
-        st.success("Scaling applied.")
-        st.write(df[scale_cols].describe())
-    else:
-        st.info("No scaling applied.")
+        st.subheader('B) Treat the outliers')
+        method = st.radio('Treatment method', options=['None', 'IQR capping', 'Z-score removal', 'Winsorize (quantiles)'])
+        if method == 'IQR capping':
+            factor = st.number_input('IQR factor', value=1.5)
+            lower, upper = iqr_treatment(df[out_col].dropna(), factor=factor)
+            st.write('Lower bound:', lower, 'Upper bound:', upper)
+            df[out_col] = np.where(df[out_col] < lower, lower, df[out_col])
+            df[out_col] = np.where(df[out_col] > upper, upper, df[out_col])
+            st.success('Applied IQR capping.')
+        elif method == 'Z-score removal':
+            thr = st.number_input('Z-score threshold', value=3.0)
+            # careful approach to avoid dropping the whole dataframe unexpectedly
+            mask = False
+            try:
+                z = np.abs(stats.zscore(df[out_col].fillna(df[out_col].mean())))
+                mask = z > thr
+                removed = mask.sum()
+                df = df.loc[~mask]
+                st.success(f'Removed {removed} rows as outliers by z-score (dropped).')
+            except Exception as e:
+                st.error(f'Z-score removal failed: {e}')
+        elif method == 'Winsorize (quantiles)':
+            q = st.slider('Winsorize quantile (each tail)', 0.0, 0.25, 0.05)
+            lower = df[out_col].quantile(q)
+            upper = df[out_col].quantile(1 - q)
+            df[out_col] = df[out_col].clip(lower, upper)
+            st.success('Applied winsorization.')
 
-st.subheader("12) Transformation (optional)")
-transform_choice = st.selectbox("Transformation", ["None", "Log (x+1)", "Box-Cox (only positive)", "Yeo-Johnson (scipy) - not implemented"], index=0)
-transform_cols = st.multiselect("Numeric columns to transform", options=num_cols, default=num_cols[:2])
-if st.button("Apply transformation"):
-    df = df.copy()
-    if transform_choice == "Log (x+1)":
-        for c in transform_cols:
-            df[c] = np.log1p(df[c].clip(lower=0))
-    elif transform_choice == "Box-Cox (only positive)":
-        from scipy.stats import boxcox
-        for c in transform_cols:
-            s = df[c].dropna()
-            if (s <= 0).any():
-                st.warning(f"{c} has non-positive values; skipping Box-Cox.")
-                continue
-            df[c] = pd.Series(boxcox(s)[0], index=s.index)
-    st.success("Transform applied.")
-
-# ---------------------------
-# Feature Selection
-# ---------------------------
-st.header("------------- Feature Selection --------------")
-st.subheader("13) Selecting Important features for ML model")
-st.write("Choose a target column (the label) to run quick feature selection and a basic ML model.")
-target = st.selectbox("Select target (for supervised feature selection / models). If none, select skip.", options=[None] + list(df.columns), index=0)
-task_type = None
-if target:
-    if df[target].dtype in [np.int64, np.float64] and df[target].nunique() > 10:
-        task_type = st.selectbox("Detected numeric target -> choose task", options=["Regression", "Classification"], index=0)
-    else:
-        task_type = st.selectbox("Detected categorical/low-card target -> choose task", options=["Classification", "Regression"], index=0)
-
-    st.write("Handle missing target rows by dropping (for demo).")
-    df_model = df.dropna(subset=[target]).copy()
-    X = df_model.drop(columns=[target])
-    y = df_model[target]
-
-    # Basic automatic numeric/categorical split for features
-    feat_cat, feat_num = get_column_types(X)
-    st.write(f"Feature counts - categorical: {len(feat_cat)}, numeric: {len(feat_num)}")
-
-    # Basic encoding for modeling
-    X_proc = X.copy()
-    for c in feat_cat:
-        X_proc[c] = X_proc[c].astype(str).fillna("NA")
-        X_proc[c] = LabelEncoder().fit_transform(X_proc[c])
-
-    # Fill remaining missing numeric with median
-    for c in X_proc.select_dtypes(include=[np.number]).columns:
-        X_proc[c] = X_proc[c].fillna(X_proc[c].median())
-
-    # Simple feature selection using SelectKBest
-    k = st.slider("Select top-k features (SelectKBest)", min_value=1, max_value=min(30, X_proc.shape[1]), value=min(10, X_proc.shape[1]))
-    if task_type == "Classification":
-        selector = SelectKBest(score_func=f_classif, k=k)
-    else:
-        selector = SelectKBest(score_func=f_regression, k=k)
-    try:
-        selector.fit(X_proc.fillna(0), y)
-        scores = selector.scores_
-        cols = X_proc.columns
-        top_idx = np.argsort(scores)[-k:][::-1]
-        top_features = cols[top_idx].tolist()
-        st.write("Top features by univariate test:")
-        st.write(pd.DataFrame({'feature': top_features, 'score': scores[top_idx]}))
-    except Exception as e:
-        st.warning("SelectKBest failed: " + str(e))
-        top_features = X_proc.columns.tolist()[:k]
-
-    # Feature importance via RandomForest
-    if st.checkbox("Show tree-based feature importances (RandomForest)"):
-        try:
-            # Choose simple estimator
-            if task_type == "Classification":
-                rf = RandomForestClassifier(n_estimators=100, random_state=42)
-            else:
-                rf = RandomForestRegressor(n_estimators=100, random_state=42)
-            rf.fit(X_proc.fillna(0), y)
-            imp = pd.Series(rf.feature_importances_, index=X_proc.columns).sort_values(ascending=False)
-            st.dataframe(imp.head(30).to_frame("importance"))
-            fig = px.bar(x=imp.head(20).index, y=imp.head(20).values, title="Top 20 Feature Importances (RF)")
+    # SECTION 9: Bivariate & multivariate analysis ---------------------------
+    st.header('9) Bi-variate and Multi-variate analysis')
+    st.subheader('A) How one column impacts another')
+    x_col = st.selectbox('X (feature)', options=['-- none --'] + df.columns.tolist(), key='xcol')
+    y_col = st.selectbox('Y (target)', options=['-- none --'] + df.columns.tolist(), key='ycol')
+    if x_col != '-- none --' and y_col != '-- none --' and x_col != y_col:
+        if x_col in num_cols and y_col in num_cols:
+            fig = px.scatter(df, x=x_col, y=y_col, trendline='ols', title=f'{y_col} vs {x_col}')
             st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.warning("RandomForest failed: " + str(e))
-
-    st.write("Proceed to quick model training")
-    if st.button("Train a simple model (train/test split 70/30)"):
-        X_train, X_test, y_train, y_test = train_test_split(X_proc[top_features], y, test_size=0.3, random_state=42)
-        if task_type == "Classification":
-            model = RandomForestClassifier(n_estimators=200, random_state=42)
-            model.fit(X_train, y_train)
-            preds = model.predict(X_test)
-            st.write("Accuracy:", accuracy_score(y_test, preds))
-            st.text(classification_report(y_test, preds))
+            st.write('Interpretation: slope of trendline indicates direction; spread indicates variance and possible heteroscedasticity.')
+        elif x_col in cat_cols and y_col in num_cols:
+            fig = px.box(df, x=x_col, y=y_col, title=f'{y_col} distribution by {x_col}')
+            st.plotly_chart(fig, use_container_width=True)
+        elif x_col in num_cols and y_col in cat_cols:
+            fig = px.violin(df, y=x_col, x=y_col, box=True, title=f'{x_col} distribution by {y_col}')
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            model = RandomForestRegressor(n_estimators=200, random_state=42)
-            model.fit(X_train, y_train)
-            preds = model.predict(X_test)
-            st.write("RMSE:", mean_squared_error(y_test, preds, squared=False))
-            st.write("R^2:", r2_score(y_test, preds))
-        st.success("Model trained. This is a quick baseline — improve with CV, tuning, pipelines.")
+            ct = pd.crosstab(df[x_col], df[y_col])
+            st.dataframe(ct)
+            st.write('Use a stacked bar/heatmap to view association.')
 
-# ---------------------------
-# Dimension reduction
-# ---------------------------
-st.header("---------- Dimension Reduction methods ----------")
-st.subheader("14) PCA & SVD (TruncatedSVD)")
-dd_cols = st.multiselect("Choose numeric columns for PCA/SVD", options=num_cols, default=num_cols[:5])
-n_components = st.slider("n components", min_value=1, max_value=min(10, max(1, len(dd_cols))), value=min(3, max(1, len(dd_cols))))
-if st.button("Run PCA / SVD"):
-    Xdr = df[dd_cols].dropna()
-    # fill missing
-    Xdr = Xdr.fillna(Xdr.median())
-    pca = PCA(n_components=n_components, random_state=42)
-    pca_res = pca.fit_transform(Xdr)
-    st.write("Explained variance ratio per component:", pca.explained_variance_ratio_)
-    df_pca = pd.DataFrame(pca_res, columns=[f"PC{i+1}" for i in range(n_components)])
-    if n_components >= 2:
-        fig = px.scatter(df_pca, x="PC1", y="PC2", title="PCA scatter (PC1 vs PC2)")
+    st.subheader('B) Correlation  C) Heatmap')
+    if len(num_cols) >= 2:
+        corr = df[num_cols].corr()
+        st.dataframe(corr)
+        fig = px.imshow(corr, text_auto=True, title='Correlation heatmap (numerical features)')
         st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(df_pca.head())
+    else:
+        st.info('Need at least 2 numerical columns for correlation matrix.')
 
-    # SVD (works with sparse / non-centered data like TF-IDF)
-    svd = TruncatedSVD(n_components=min(n_components, Xdr.shape[1]-1 or 1), random_state=42)
-    try:
-        svd_res = svd.fit_transform(Xdr)
-        st.write("SVD explained variance ratio (approx):", svd.explained_variance_ratio_[:n_components])
-    except Exception as e:
-        st.warning("SVD failed: " + str(e))
+    # SECTION 10: Encoding -----------------------------------------------
+    st.header('10) Encoding — Convert categorical to numerical')
+    st.markdown('A) Label Encoder  B) OneHotEncoder')
+    enc_col = st.multiselect('Select categorical columns to encode', options=cat_cols)
+    encoding_method = st.radio('Choose encoding method', options=['LabelEncoder', 'OneHotEncoder (drop-first)'])
+    if st.button('Apply encoding'):
+        if not enc_col:
+            st.error('Choose one or more categorical columns to encode.')
+        else:
+            if encoding_method == 'LabelEncoder':
+                le = LabelEncoder()
+                for c in enc_col:
+                    df[c] = df[c].astype(str).fillna('##MISSING##')
+                    df[c] = le.fit_transform(df[c])
+                st.success('Applied LabelEncoder to selected columns.')
+            else:
+                df = pd.get_dummies(df, columns=enc_col, drop_first=True)
+                st.success('Applied OneHotEncoding (drop_first=True).')
 
-# ---------------------------
-# Save & download cleaned data
-# ---------------------------
-st.header("Save & Export")
-if st.button("Download cleaned data CSV"):
-    st.markdown(quick_download_link(df, filename="cleaned_data.csv"), unsafe_allow_html=True)
+    # SECTION 11: Scaling -------------------------------------------------
+    st.header('11) Scaling')
+    st.markdown('A) Standardization  B) Normalization (MinMax)')
+    scale_cols = st.multiselect('Select numerical columns to scale', options=num_cols)
+    scaler_choice = st.radio('Scaler', options=['None', 'StandardScaler', 'MinMaxScaler'])
+    if st.button('Apply scaling'):
+        if scaler_choice == 'StandardScaler' and scale_cols:
+            ss = StandardScaler()
+            df[scale_cols] = ss.fit_transform(df[scale_cols])
+            st.success('Applied StandardScaler.')
+        elif scaler_choice == 'MinMaxScaler' and scale_cols:
+            mm = MinMaxScaler()
+            df[scale_cols] = mm.fit_transform(df[scale_cols])
+            st.success('Applied MinMaxScaler.')
+        else:
+            st.info('No scaler applied or no columns selected.')
 
-st.write("If you'd like a local copy of the app, download this repo or copy `app.py`, `Dockerfile`, and `requirements.txt`.")
+    # SECTION 12: Transformation -----------------------------------------
+    st.header('12) Transformations')
+    trans_col = st.selectbox('Choose a numerical column to transform', options=['-- none --'] + num_cols, key='trans')
+    if trans_col and trans_col != '-- none --':
+        trans_method = st.selectbox('Transformation', options=['log1p', 'sqrt', 'box-cox (positive only)', 'yeo-johnson (sklearn)'])
+        if st.button('Apply transformation'):
+            if trans_method == 'log1p':
+                df[trans_col] = np.log1p(df[trans_col])
+                st.success('Applied log1p.')
+            elif trans_method == 'sqrt':
+                df[trans_col] = np.sqrt(df[trans_col].clip(lower=0))
+                st.success('Applied sqrt (negative values clipped).')
+            elif trans_method == 'box-cox':
+                from scipy.stats import boxcox
+                series = df[trans_col].dropna()
+                if (series <= 0).any():
+                    st.error('Box-Cox requires positive values only.')
+                else:
+                    df[trans_col], _ = boxcox(series)
+                    st.success('Applied boxcox.')
+            elif trans_method == 'yeo-johnson (sklearn)':
+                from sklearn.preprocessing import PowerTransformer
+                pt = PowerTransformer(method='yeo-johnson')
+                mask = df[trans_col].notna()
+                df.loc[mask, trans_col] = pt.fit_transform(df.loc[mask, [trans_col]])
+                st.success('Applied Yeo-Johnson transformation.')
+
+    # SECTION 13: Feature selection --------------------------------------
+    st.header('13) Selecting important features for ML model')
+    st.markdown('This section gives a few quick unsupervised suggestions: variance-threshold, correlation filter, and simple tree-based importance (if target provided).')
+    target_col = st.selectbox('(Optional) Choose a target column for supervised feature importance', options=['-- none --'] + df.columns.tolist(), key='target')
+    fs_action = st.selectbox('Choose method', options=['Variance filter (low variance)', 'Correlation filter (highly correlated)', 'Tree-based importance (requires target)'])
+    if st.button('Run feature-selection'):
+        if fs_action.startswith('Variance'):
+            from sklearn.feature_selection import VarianceThreshold
+            vt = VarianceThreshold(threshold=0.0)
+            numeric_for_fs = df.select_dtypes(include=[np.number]).fillna(0)
+            vt.fit(numeric_for_fs)
+            keep = numeric_for_fs.columns[vt.variances_ > 0]
+            st.write('Kept columns (variance > 0):', list(keep))
+        elif fs_action.startswith('Correlation'):
+            num = df.select_dtypes(include=[np.number])
+            corr = num.corr().abs()
+            upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+            high_corr = [column for column in upper.columns if any(upper[column] > 0.9)]
+            st.write('Columns with high correlation (>0.9) to drop or inspect:', high_corr)
+        else:
+            if target_col == '-- none --':
+                st.error('Provide a target column for tree-based importance.')
+            else:
+                from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+                X = df.select_dtypes(include=[np.number]).dropna(axis=1, how='all').fillna(0)
+                y = df[target_col]
+                if y.dtype == 'object' or y.nunique() < 20:
+                    model = RandomForestClassifier(n_estimators=50, random_state=0)
+                else:
+                    model = RandomForestRegressor(n_estimators=50, random_state=0)
+                # align shapes
+                X = X.loc[y.dropna().index]
+                y = y.dropna()
+                model.fit(X, y)
+                imp = pd.Series(model.feature_importances_, index=X.columns).sort_values(ascending=False)
+                st.dataframe(imp.head(30).rename('importance'))
+
+    # SECTION 14: PCA & SVD -----------------------------------------------
+    st.header('14) PCA & SVD')
+    st.markdown('Compute PCA (for numerical features) and Truncated SVD for sparse/dummy-encoded features.')
+    pca_cols = st.multiselect('Select columns for PCA (numerical recommended)', options=num_cols)
+    if st.button('Run PCA'):
+        if len(pca_cols) < 2:
+            st.error('Choose at least 2 numeric columns for PCA.')
+        else:
+            pca = PCA(n_components=min(len(pca_cols), 10))
+            X = df[pca_cols].dropna()
+            comp = pca.fit_transform(X)
+            var = pca.explained_variance_ratio_
+            st.write('Explained variance ratio (components):')
+            st.write(var.round(4))
+            fig = px.bar(x=[f'PC{i+1}' for i in range(len(var))], y=var, title='PCA explained variance ratio')
+            st.plotly_chart(fig, use_container_width=True)
+            # 2D scatter if at least 2 components
+            if comp.shape[1] >= 2:
+                fig2 = px.scatter(x=comp[:, 0], y=comp[:, 1], title='PCA projection (PC1 vs PC2)')
+                st.plotly_chart(fig2, use_container_width=True)
+
+    svd_cols = st.multiselect('Select columns for Truncated SVD (sparse/dummy features)', options=df.columns.tolist())
+    if st.button('Run Truncated SVD'):
+        if len(svd_cols) < 2:
+            st.error('Choose at least 2 columns for SVD.')
+        else:
+            X = pd.get_dummies(df[svd_cols].fillna('##MISSING##'))
+            svd = TruncatedSVD(n_components=min(10, X.shape[1]-1))
+            comp = svd.fit_transform(X)
+            st.write('Explained variance ratio (SVD components):')
+            st.write(svd.explained_variance_ratio_.round(4))
+
+    # Export cleaned dataset
+    st.header('Export / Save')
+    st.markdown('Download the transformed / cleaned dataset')
+    fmt = st.selectbox('Choose download format', options=['csv', 'xlsx'])
+    if st.button('Create download link'):
+        fn = f'cleaned.{fmt}'
+        href = download_link(df, filename=fn)
+        st.markdown(f"[Download cleaned dataset]({href})")
+
+    st.markdown('---')
+    st.info('This app attempts a broad, practical EDA pipeline. For production ML pipelines, convert interactive steps into reproducible scripts and tests.')
+
+else:
+    st.title('Full EDA pipeline')
+    st.write('Upload a .csv / .xlsx / .xls file from the left sidebar to begin.')
